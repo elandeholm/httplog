@@ -118,7 +118,7 @@ class HTTPLog:
             # just return early if the host is blacklisted
             return
 
-        self.log(flow, self.minutes())
+        self.log(flow)
 
     def filter_request_method(self, request_method: str, url: str) -> str:
         # remove leading & trailing WS, uppercase,
@@ -176,7 +176,7 @@ class HTTPLog:
 
         return super_type + "/" + sub_type
 
-    def log(self, flow: http.HTTPFlow, minutes: int) -> None:
+    def log(self, flow: http.HTTPFlow) -> None:
         url = flow.request.pretty_url
         request_method = flow.request.method
         status_code = None
