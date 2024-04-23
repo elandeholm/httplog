@@ -9,11 +9,17 @@ import time
 import base64
 import bs4
 import sys
+import os
+import random
 
 from mitmproxy import ctx
 from mitmproxy import http
 
 class HTTPLog:
+    def date(self) -> str:
+        lt = time.localtime(time.time())
+        return "{:04d}-{:02d}-{:02d}".format(lt.tm_year, lt.tm_mon, lt.tm_mday)
+
     # circa minutes since epoch is fine
     # we don't need a massive xxxxxxxxxxx.yyyyyyyy time code on every line
 
@@ -54,6 +60,7 @@ class HTTPLog:
                 ]),
             help="content type whitelist for BeautifulSoup",
         )
+
         loader.add_option(
             name="open_browser",
             typespec=bool,
@@ -78,6 +85,11 @@ class HTTPLog:
             default=blacklisted_hosts,
             help="set of blacklisted hosts",
         )
+
+        self.image_cts = set([
+            "image/jpg", "image/jpeg", "image/png", "image/gif",
+            "image/svg", "image/svg+xml", "image/webp"
+            ])
 
         self.valid_request_methods = set([
             "HEAD", "GET", "PUT", "POST", "OPTIONS",
@@ -111,6 +123,34 @@ class HTTPLog:
         if updated:
             self.debug("configuration updated")
             self.debug(str(ctx.options.host_blacklist))
+
+    def dump_image(self, url: str, ct: str, content: bytes) -> None:
+        file_name = ""
+
+        for c in url:
+            if c.isalnum():
+                file_name += c
+            else:
+                file_name += "-"
+
+        while "--" in file_name:
+            file_name = file_name.replace("--","-")
+
+        file_name = file_name[:100] + "." + ct[ct.find("/") + 1:]
+
+
+        dname = "images/" + self.date()
+        if not os.path.exists(dname):
+            os.mkdir(dname, mode=0o775)
+        
+        fname = dname + "/" + file_name
+
+        try:
+            f = open(fname, "wb")
+            with f:
+                f.write(content)
+        except FileNotFoundError:
+            self.debug(f"cannot create {fname}", url=url)
 
     def response(self, flow: http.HTTPFlow) -> None:
         if flow.request.pretty_host.lower() in ctx.options.host_blacklist:
@@ -171,7 +211,7 @@ class HTTPLog:
         # remove non alnum and truncate if too long
 
         sub_type = sub_type.strip().lower()
-        sub_type = ''.join(filter(str.isalnum, sub_type)) 
+        #sub_type = ''.join(filter(str.isalnum, sub_type)) 
         sub_type = sub_type[:10]
 
         return super_type + "/" + sub_type
@@ -207,47 +247,68 @@ class HTTPLog:
 
         have_title = False
         if have_content_type and content_type in ctx.options.bs4_ct_wl:
+            text = None
+
             if have_response:
-                text = flow.response.text
-
-                # this is to catch BS4 warnings
-                # so I can see what requests/texts/encodings
-                # triggers them, in order to code around any
-                # issues, and/or add a host to the blacklist
-
-                import warnings
-                warnings.simplefilter("error")
-
                 try:
-                    bs = bs4.BeautifulSoup(text, 'html.parser')
-                    if bs.title is None:
-                        # This is a kludge. Youtube generates so many of these
-                        # and they clog up the debug and the log
+                    # This can throw a ValueError if the host
+                    # lies about the encoding
+                    text = flow.response.text
+                except ValueError:
+                    self.debug(f".text decode error ct={content_type}", host=flow.request.pretty_host)
 
-                        if flow.request.pretty_host == "www.youtube.com":
-                            return
-                        self.debug(f"bs4 <None> title. ct={content_type}",
-                            host=flow.request.pretty_host)
-                    else:
-                        t = bs.title.string
-                        if t is None:
-                          self.debug(f"bs4 no title string: ct={content_type}", url=url)
+                if text is not None:
+
+                    # this is to catch BS4 warnings
+                    # so I can see what requests/texts/encodings
+                    # triggers them, in order to code around any
+                    # issues, and/or add a host to the blacklist
+
+                    import warnings
+                    warnings.simplefilter("error")
+
+                    try:
+                        bs = bs4.BeautifulSoup(text, 'html.parser')
+                        if bs.title is None:
+                            # This is a kludge. Youtube generates so many of these
+                            # and they clog up the debug and the log
+
+                            if flow.request.pretty_host == "www.youtube.com":
+                                return
+                            self.debug(f"bs4 <None> title. ct={content_type}",
+                                host=flow.request.pretty_host)
                         else:
-                            title = t
-                            have_title = True
-                except Exception as e:
-                    e_info = str(e)[:100]
-                    self.debug(f"bs4 failed. e={e_info}, ct={content_type}", url=url)
+                            t = bs.title.string
+                            if t is None:
+                              self.debug(f"bs4 no title string: ct={content_type}", url=url)
+                            else:
+                                title = t
+                                have_title = True
+                    except Exception as e:
+                        e_info = str(e)[:100]
+                        self.debug(f"bs4 failed. e={e_info}, ct={content_type}", url=url)
 
-                # TODO: While "ignore" "works", it's really quite
-                # sketchy. What I WANT to do is to restore warnings
-                # to its state before I did simplefilter("error")
+                    # TODO: While "ignore" "works", it's really quite
+                    # sketchy. What I WANT to do is to restore warnings
+                    # to its state before I did simplefilter("error")
 
-                # I'm sure the right way is to use a context manager
-                # I'll just remove the warnings->errors once I've ironed
-                # out most of the issues with BS4 parsing of random data
+                    # I'm sure the right way is to use a context manager
+                    # I'll just remove the warnings->errors once I've ironed
+                    # out most of the issues with BS4 parsing of random data
 
-                warnings.simplefilter("ignore")
+                    warnings.simplefilter("ignore")
+
+        content = ""
+        try:
+            content = flow.response.content
+        except:
+            pass
+
+        if content_type in self.image_cts:
+            if len(content) < 5000000 and len(content) > 99:
+                self.dump_image(url, content_type, content)
+            else:
+                self.debug("image too large or small, not dumped", url=url)
 
         haves = "{}{}{}".format(int(have_response), int(have_content_type), int(have_title))
 
