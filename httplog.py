@@ -96,7 +96,7 @@ class HTTPLog:
             "DELETE", "CONNECT", "TRACE", "PATCH"
             ])
 
-        self.logfile   = open("http.log", "a", buffering=1)
+        self.logfile   = open("http.log", "a")
         self.debugfile = open("debug.log", "a", buffering=1)
 
     def debug(self, message: str, url: str = "", host: str = "") -> None:
@@ -275,12 +275,12 @@ class HTTPLog:
 
                             if flow.request.pretty_host == "www.youtube.com":
                                 return
-                            self.debug(f"bs4 <None> title. ct={content_type}",
-                                host=flow.request.pretty_host)
+                            #self.debug(f"bs4 <None> title. ct={content_type}", host=flow.request.pretty_host)
                         else:
                             t = bs.title.string
                             if t is None:
-                              self.debug(f"bs4 no title string: ct={content_type}", url=url)
+                              #self.debug(f"bs4 no title string: ct={content_type}", url=url)
+                              pass
                             else:
                                 title = t
                                 have_title = True
@@ -308,7 +308,8 @@ class HTTPLog:
             if len(content) < 5000000 and len(content) > 99:
                 self.dump_image(url, content_type, content)
             else:
-                self.debug("image too large or small, not dumped", url=url)
+                # self.debug("image too large or small, not dumped", url=url)
+                pass
 
         haves = "{}{}{}".format(int(have_response), int(have_content_type), int(have_title))
 
